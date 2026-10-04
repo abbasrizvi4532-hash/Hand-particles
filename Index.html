@@ -1,0 +1,222 @@
+# Hand-particles
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mobile Hand Gesture 3D Particles</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #050505;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            touch-action: none;
+        }
+        #webcam-video {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 100px;
+            height: 133px;
+            border-radius: 12px;
+            transform: scaleX(-1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            z-index: 10;
+            object-fit: cover;
+            background: #111;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            color: white;
+            z-index: 10;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 14px 18px;
+            border-radius: 12px;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            text-align: center;
+        }
+        h1 { font-size: 15px; margin: 0 0 4px 0; font-weight: 600; }
+        p { font-size: 11px; margin: 0; opacity: 0.85; line-height: 1.4; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <div id="ui">
+        <h1>Mobile Gesture Particles</h1>
+        <p>Front camera active. Point your hand & pinch thumb/index to explode!</p>
+    </div>
+    <video id="webcam-video" autoplay playsinline muted></video>
+
+    <script>
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.025);
+
+        const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 14;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const particleCount = 3500;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const originalPositions = new Float32Array(particleCount * 3);
+
+        for (let i = 0; i < particleCount * 3; i += 3) {
+            const u = Math.random();
+            const v = Math.random();
+            const theta = u * 2.0 * Math.PI;
+            const phi = Math.acos(2.0 * v - 1.0);
+            const r = 3.5 * Math.cbrt(Math.random());
+
+            const x = r * Math.sin(phi) * Math.cos(theta);
+            const y = r * Math.sin(phi) * Math.sin(theta);
+            const z = r * Math.cos(phi);
+
+            positions[i] = x;
+            positions[i + 1] = y;
+            positions[i + 2] = z;
+
+            originalPositions[i] = x;
+            originalPositions[i + 1] = y;
+            originalPositions[i + 2] = z;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        const canvasTex = document.createElement('canvas');
+        canvasTex.width = 64;
+        canvasTex.height = 64;
+        const ctx = canvasTex.getContext('2d');
+        const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, 'rgba(255,255,255,1)');
+        gradient.addColorStop(0.3, 'rgba(0,180,255,0.8)');
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 64, 64);
+
+        const texture = new THREE.CanvasTexture(canvasTex);
+        const material = new THREE.PointsMaterial({
+            size: 0.35,
+            map: texture,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        let targetX = 0, targetY = 0;
+        let isPinching = false;
+        let explosionFactor = 1.0;
+
+        const videoElement = document.getElementById('webcam-video');
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 0,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults((results) => {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                const indexTip = landmarks[8];
+                
+                targetX = (indexTip.x - 0.5) * -10;
+                targetY = (indexTip.y - 0.5) * 14;
+
+                const thumbTip = landmarks[4];
+                const dx = thumbTip.x - indexTip.x;
+                const dy = thumbTip.y - indexTip.y;
+                const dz = thumbTip.z - indexTip.z;
+                const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                isPinching = distance < 0.06;
+            } else {
+                targetX = 0;
+                targetY = 0;
+                isPinching = false;
+            }
+        });
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 360,
+            height: 480
+        });
+        cameraFeed.start().catch(err => {
+            console.error("Camera access error:", err);
+            document.querySelector('#ui p').innerText = "Camera permission needed! Please allow camera access.";
+        });
+
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+
+            const posArr = geometry.attributes.position.array;
+            const targetExplosion = isPinching ? 2.8 : 1.0;
+            explosionFactor += (targetExplosion - explosionFactor) * 0.12;
+
+            for (let i = 0; i < particleCount; i++) {
+                const idx = i * 3;
+                let ox = originalPositions[idx];
+                let oy = originalPositions[idx+1];
+                let oz = originalPositions[idx+2];
+
+                const angle = time * 0.4 + i;
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+
+                let px = ox * cos - oz * sin;
+                let pz = ox * sin + oz * cos;
+                let py = oy + Math.sin(time * 1.5 + i) * 0.15;
+
+                const distX = targetX - px;
+                const distY = targetY - py;
+                const dist = Math.sqrt(distX*distX + distY*distY);
+
+                if (dist < 5.0 && !isPinching) {
+                    px += distX * 0.04;
+                    py += distY * 0.04;
+                }
+
+                posArr[idx] = px * explosionFactor;
+                posArr[idx+1] = py * explosionFactor;
+                posArr[idx+2] = pz * explosionFactor;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            particleSystem.rotation.y = time * 0.04;
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
